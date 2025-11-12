@@ -2,8 +2,10 @@
 import datetime
 import sqlite3
 from core.validation import get_valid_date_input
-from core.database import execute_query # Import the core DB execution function
-from termcolor import colored # Import termcolor for colored messages
+from core.database import execute_query
+from core.styles import get_style # Assuming this is the correct import for the centralized styling
+from core.formatting import format_date # NEW IMPORT
+from rich import print as rprint
 
 def document_expiry_tracker(data, print_log_table):
     """
@@ -11,7 +13,7 @@ def document_expiry_tracker(data, print_log_table):
     LOOP ADDED to keep the user in this tracker until they exit.
     """
     while True: # Persistence Loop
-        print(colored("\n--- 📄 Document Expiry Tracker ---", 'cyan'))
+        rprint(f"[{get_style('HEADER')}]\n--- 📄 Document Expiry Tracker ---[/]")
 
         today = datetime.date.today()
 
@@ -19,7 +21,7 @@ def document_expiry_tracker(data, print_log_table):
         try:
             columns, results = execute_query("SELECT id, name, expiry_date FROM documents ORDER BY expiry_date ASC")
         except sqlite3.Error as e:
-            print(colored(f"Database Error: Could not retrieve documents. {e}", 'red'))
+            rprint(f"[{get_style('ERROR')}]Database Error: Could not retrieve documents. {e}[/]")
             return # Exit if the initial load fails
 
         processed_docs = []
@@ -33,7 +35,7 @@ def document_expiry_tracker(data, print_log_table):
                     'ID': doc_id,
                     'NAME': name,
                     'EXPIRY_DATE': expiry_date_str,
-                    'STATUS': colored("Error: Invalid date format in DB", 'red'),
+                    'STATUS': f"[{get_style('ERROR')}]Error: Invalid date format in DB[/]",
                     'days_remaining': 999999
                 })
                 continue
@@ -42,16 +44,16 @@ def document_expiry_tracker(data, print_log_table):
 
             status = ""
             if days_remaining < 0:
-                status = colored(f"EXPIRED ({abs(days_remaining)} days ago)", 'red', attrs=['bold'])
+                status = f"[{get_style('ERROR')} bold]EXPIRED ({abs(days_remaining)} days ago)[/]"
             elif days_remaining <= 90:
-                status = colored(f"WARNING: Expires in {days_remaining} days", 'yellow', attrs=['bold'])
+                status = f"[{get_style('WARNING')} bold]WARNING: Expires in {days_remaining} days[/]"
             else:
-                status = f"Expires in {days_remaining} days"
+                status = f"[{get_style('INFO')}]Expires in {days_remaining} days[/]"
 
             processed_docs.append({
                 'ID': doc_id,
                 'NAME': name,
-                'EXPIRY_DATE': expiry_date.isoformat(),
+                'EXPIRY_DATE': format_date(expiry_date.isoformat()), # Use format_date
                 'STATUS': status,
                 'days_remaining': days_remaining
             })
@@ -59,7 +61,7 @@ def document_expiry_tracker(data, print_log_table):
         # The SQL query already sorts them, but we use the days_remaining key for final sorting integrity
         sorted_docs = sorted(processed_docs, key=lambda x: x['days_remaining'])
 
-        print(colored("\n**📋 Current Documents (Sorted by Expiry Date):**", 'white', attrs=['bold']))
+        rprint(f"[{get_style('INFO')} bold]\n**📋 Current Documents (Sorted by Expiry Date):**[/]")
 
         if sorted_docs:
             # Prepare for print_log_table
@@ -68,132 +70,130 @@ def document_expiry_tracker(data, print_log_table):
 
             print_log_table(headers, sorted_docs, column_keys)
         else:
-            print("No documents logged.")
+            rprint(f"[{get_style('WARNING')}]No documents logged.[/]")
 
 
         # --- Menu and User Input ---
-        print("\n[A]dd, [E]dit, [D]elete Document, [B]ack to Main Menu")
-        choice = input(colored("Enter option: ", 'green')).upper()
+        rprint("\n[A]dd, [E]dit, [D]elete Document, [B]ack to Main Menu")
+        choice = input(f"[{get_style('PROMPT')}]Enter option: [/]").upper()
 
         if choice == 'A':
-            print(colored("\n--- Add Document ---", 'yellow'))
+            rprint(f"[{get_style('WARNING')}]\n--- Add Document ---[/]")
+
             name = ""
             while True:
                 name = input("Document Name (e.g., Driver's License, Type 'B' to cancel): ").strip()
                 if name.upper() in ['B', 'BACK']:
-                    print(colored("Action cancelled.", 'yellow'))
-                    break # Exit the inner loop, cancellation handled below
+                    rprint(f"[{get_style('WARNING')}]Action cancelled.[/]")
+                    break
                 if name:
                     break
-                print(colored("Error: Document name cannot be blank.", 'red'))
+                rprint(f"[{get_style('ERROR')}]Error: Document name cannot be blank.[/]")
 
             if name.upper() in ['B', 'BACK']:
-                print(colored("Action cancelled.", 'yellow'))
                 continue
 
             expiry_str = get_valid_date_input("Expiry Date (YYYY-MM-DD): ", allow_empty=False)
 
-            # --- CANCELLATION CHECK 1 (Date) ---
             if expiry_str is None:
-                print(colored("Action cancelled.", 'yellow'))
+                rprint(f"[{get_style('WARNING')}]Action cancelled.[/]")
                 continue
 
             try:
-                # INSERT INTO documents
                 execute_query("INSERT INTO documents (name, expiry_date) VALUES (?, ?)", (name, expiry_str))
-                print(colored(f"Document '{name}' added successfully.", 'green'))
+                rprint(f"[{get_style('SUCCESS')}]Document '{name}' added successfully.[/]")
             except sqlite3.Error as e:
-                print(colored(f"Error adding document: {e}", 'red'))
+                rprint(f"[{get_style('ERROR')}]Error adding document: {e}[/]")
 
         elif choice == 'E':
-            print(colored("\n--- Edit Document ---", 'yellow'))
+            rprint(f"[{get_style('WARNING')}]\n--- Edit Document ---[/]")
             doc_id_input = input("Enter ID of document to EDIT (Type 'B' to cancel): ")
 
             if doc_id_input.upper() in ['B', 'BACK']:
-                print(colored("Action cancelled.", 'yellow'))
+                rprint(f"[{get_style('WARNING')}]Action cancelled.[/]")
                 continue
 
             try:
                 doc_id = int(doc_id_input)
 
-                # 1. Retrieve current data for editing prompt
                 _, current_doc_result = execute_query("SELECT name, expiry_date FROM documents WHERE id = ?", (doc_id,))
                 if not current_doc_result:
-                    print(colored("Error: Invalid Document ID.", 'red'))
+                    rprint(f"[{get_style('ERROR')}]Error: Invalid Document ID.[/]")
                     continue
 
                 current_name, current_expiry = current_doc_result[0]
 
-                new_name = input(f"New Name (current: {current_name}, press ENTER to keep): ")
+                # --- Input loop for new name ---
+                name_to_update = current_name
+                while True:
+                    new_name = input(f"New Name (current: {current_name}, press ENTER to keep, type 'B' to cancel): ").strip()
+                    if new_name.upper() in ['B', 'BACK']:
+                        rprint(f"[{get_style('WARNING')}]Edit cancelled.[/]")
+                        return # Use return to break out of E choice entirely
+                    if new_name:
+                        name_to_update = new_name
+                        break
+                    elif not new_name:
+                        break
+                    rprint(f"[{get_style('ERROR')}]Error: Document name cannot be blank.[/]")
 
-                # Check for cancellation during subsequent input
-                if new_name.upper() in ['B', 'BACK']:
-                    print(colored("Edit cancelled.", 'yellow'))
-                    continue
-
-                # Prompt for date. We use standard input first, then validate if not empty.
-                new_expiry_str_input = input(f"New Expiry Date (current: {current_expiry}, press ENTER to keep, or type 'B' to cancel): ")
-
-                if new_expiry_str_input.upper() in ['B', 'BACK']:
-                    print(colored("Edit cancelled.", 'yellow'))
-                    continue
-
-                name_to_update = new_name if new_name else current_name
                 expiry_to_update = current_expiry
 
+                new_expiry_str_input = input(f"New Expiry Date (current: {format_date(current_expiry)}, press ENTER to keep): ").strip() # Use format_date in prompt
+
+                if new_expiry_str_input.upper() in ['B', 'BACK']:
+                    rprint(f"[{get_style('WARNING')}]Edit cancelled.[/]")
+                    continue
+
                 if new_expiry_str_input:
-                    # Validate the entered date string using the core validator
                     validated_date = get_valid_date_input(f"Confirm '{new_expiry_str_input}' or enter new date (YYYY-MM-DD): ", allow_empty=True)
 
-                    if validated_date is not None and validated_date != '':
-                        expiry_to_update = validated_date
-                    elif validated_date is None: # User canceled validation prompt
-                        print(colored("Edit cancelled.", 'yellow'))
+                    if validated_date is None:
+                        rprint(f"[{get_style('WARNING')}]Edit cancelled.[/]")
                         continue
-                    # Else: If validated_date is '', it means user confirmed an empty value which is handled by previous input check
 
-                # 2. UPDATE database record
+                    if validated_date != '':
+                        expiry_to_update = validated_date
+
                 if name_to_update != current_name or expiry_to_update != current_expiry:
                     execute_query("UPDATE documents SET name = ?, expiry_date = ? WHERE id = ?",
                                   (name_to_update, expiry_to_update, doc_id))
-                    print(colored(f"Document ID {doc_id} updated successfully.", 'green'))
+                    rprint(f"[{get_style('SUCCESS')}]Document ID {doc_id} updated successfully.[/]")
                 else:
-                    print("No changes made.")
+                    rprint(f"[{get_style('INFO')}]No changes made.[/]")
 
             except ValueError:
-                print(colored("Error: Invalid ID format. Must be a number.", 'red'))
+                rprint(f"[{get_style('ERROR')}]Error: Invalid ID format. Must be a number.[/]")
             except sqlite3.Error as e:
-                print(colored(f"Error updating document: {e}", 'red'))
+                rprint(f"[{get_style('ERROR')}]Error updating document: {e}[/]")
+            # Removed redundant SystemExit exception handling
 
         elif choice == 'D':
-            print(colored("\n--- Delete Document ---", 'red'))
+            rprint(f"[{get_style('ERROR')}]\n--- Delete Document ---[/]")
             doc_id_input = input("Enter ID of document to DELETE (Type 'B' to cancel): ")
 
             if doc_id_input.upper() in ['B', 'BACK']:
-                print(colored("Action cancelled.", 'yellow'))
+                rprint(f"[{get_style('WARNING')}]Action cancelled.[/]")
                 continue
 
             try:
                 doc_id = int(doc_id_input)
 
-                # DELETE record
                 execute_query("DELETE FROM documents WHERE id = ?", (doc_id,))
 
-                # Check if row was actually deleted
                 _, check_results = execute_query("SELECT name FROM documents WHERE id = ?", (doc_id,))
                 if not check_results:
-                    print(colored(f"Document ID {doc_id} deleted successfully.", 'green'))
+                    rprint(f"[{get_style('SUCCESS')}]Document ID {doc_id} deleted successfully.[/]")
                 else:
-                    print(colored("Error: Document not found or deletion failed.", 'red'))
+                    rprint(f"[{get_style('ERROR')}]Error: Document not found or deletion failed.[/]")
 
             except ValueError:
-                print(colored("Error: Invalid ID format. Must be a number.", 'red'))
+                rprint(f"[{get_style('ERROR')}]Error: Invalid ID format. Must be a number.[/]")
             except sqlite3.Error as e:
-                print(colored(f"Error deleting document: {e}", 'red'))
+                rprint(f"[{get_style('ERROR')}]Error deleting document: {e}[/]")
 
         elif choice == 'B':
-            # Exit the loop and return to the main menu
             return
 
         else:
-            print(colored("Invalid option. Please choose A, E, D, or B.", 'red'))
+            rprint(f"[{get_style('ERROR')}]Invalid option. Please choose A, E, D, or B.[/]")

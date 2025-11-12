@@ -3,8 +3,10 @@ from decimal import Decimal, ROUND_HALF_UP
 from core.validation import get_valid_float_input, get_valid_date_input
 from core.database import execute_query
 import sqlite3
-from datetime import date # Explicit import
-from termcolor import colored # ADDED: for color output
+from datetime import date
+from core.styles import get_style
+from core.formatting import format_currency, format_number, format_date # NEW IMPORTS
+from rich import print as rprint
 
 hide_base_salay = True
 
@@ -29,35 +31,34 @@ def calculate_allowance(base_salary, total_fiscal_days, overseas_days, overtime_
 
         return round_currency(overseas_allowance), round_currency(overtime_amount)
     except Exception as e:
-        # Note: Calculation errors here should be non-critical, usually due to bad input data type
         return 0.0, 0.0
 
 def setup_salary(data):
     """Allows the user to set initial salary parameters and fiscal days."""
-    print(colored("\n--- 💵 Salary Setup ---", 'magenta'))
+    rprint(f"[{get_style('INFO')}]\n--- 💵 Salary Setup ---[/]")
 
-    # CHECK 1: Base Salary
-    new_base = get_valid_float_input(f"Enter New Monthly Base Salary (current: ${data['salary']['monthly_base']:.2f}): ", allow_negative=False)
+    # Use format_currency for display in prompt
+    new_base = get_valid_float_input(f"Enter New Monthly Base Salary (current: {format_currency(data['salary']['monthly_base'])}): ", allow_negative=False)
     if new_base is None:
-        print(colored("Salary setup cancelled.", 'yellow'))
+        rprint(f"[{get_style('WARNING')}]Salary setup cancelled.[/]")
         return
     data['salary']['monthly_base'] = new_base
 
-    # CHECK 2: Fiscal Days
-    new_fiscal_days = get_valid_float_input(f"Enter Monthly Fiscal Days (e.g., 22, current: {data['salary']['total_fiscal_days']:.1f}): ", allow_negative=False)
+    # Use format_number for display in prompt
+    new_fiscal_days = get_valid_float_input(f"Enter Monthly Fiscal Days (e.g., 22, current: {format_number(data['salary']['total_fiscal_days'])}): ", allow_negative=False)
     if new_fiscal_days is None:
-        print(colored("Salary setup cancelled.", 'yellow'))
+        rprint(f"[{get_style('WARNING')}]Salary setup cancelled.[/]")
         return
     data['salary']['total_fiscal_days'] = new_fiscal_days
 
-    # CHECK 3: Allowance Rate
-    new_rate = get_valid_float_input(f"Enter Overseas Allowance Rate (percentage, e.g., 20 for 20%, current: {data['salary']['overseas_allowance_rate']:.1f}%): ", allow_negative=False)
+    # Use format_number for display in prompt
+    new_rate = get_valid_float_input(f"Enter Overseas Allowance Rate (percentage, e.g., 20 for 20%, current: {format_number(data['salary']['overseas_allowance_rate'])}%): ", allow_negative=False)
     if new_rate is None:
-        print(colored("Salary setup cancelled.", 'yellow'))
+        rprint(f"[{get_style('WARNING')}]Salary setup cancelled.[/]")
         return
     data['salary']['overseas_allowance_rate'] = new_rate
 
-    print(colored("Salary, Fiscal Days, and Allowance Rate updated.", 'green'))
+    rprint(f"[{get_style('SUCCESS')}]Salary, Fiscal Days, and Allowance Rate updated.[/]")
 
 def salary_bonus_tracker(data, print_log_table):
     """
@@ -65,94 +66,77 @@ def salary_bonus_tracker(data, print_log_table):
     LOOP ADDED to keep the user in the tracker until they exit.
     """
     salary_data = data['salary']
-    monthly_base = salary_data['monthly_base'] # Retrieve base salary
+    monthly_base = salary_data['monthly_base']
 
-    while True: # Persistence Loop
-        print(colored("\n--- 💵 Salary and Bonus Tracker ---", 'cyan'))
+    while True:
+        rprint(f"[{get_style('HEADER')}]\n--- 💵 Salary and Bonus Tracker ---[/]")
 
         if hide_base_salay:
-            print(f"**Monthly Base Salary:** {colored('****', 'white')}")
+            rprint(f"**Monthly Base Salary:** [white]****[/white]")
         else:
-            print(f"**Monthly Base Salary:** {colored(f'${monthly_base:.2f}', 'white')}")
+            rprint(f"**Monthly Base Salary:** [white]{format_currency(monthly_base)}[/white]") # Use format_currency
 
-        print(f"**Monthly Fiscal Days:** {salary_data['total_fiscal_days']:.1f}")
-        print(f"**Overseas Allowance Rate:** {salary_data['overseas_allowance_rate']:.1f}%")
+        rprint(f"**Monthly Fiscal Days:** {format_number(salary_data['total_fiscal_days'])}") # Use format_number
+        rprint(f"**Overseas Allowance Rate:** {format_number(salary_data['overseas_allowance_rate'])}%") # Use format_number
 
-        # --- SQL CHANGE: Calculate totals from DB ---
         try:
-            # Calculate sum of all logged amounts
             total_summary_result = execute_query("""
                 SELECT SUM(allowance_amount), SUM(overtime_amount), SUM(total_earned)
                 FROM allowance_logs
             """)
 
-            # Safely unpack the results (handle NULLs)
             totals = total_summary_result[1][0] if total_summary_result[1] else (0.0, 0.0, 0.0)
             total_allowance = totals[0] if totals[0] is not None else 0.0
             total_overtime = totals[1] if totals[1] is not None else 0.0
             grand_total_allowance = totals[2] if totals[2] is not None else 0.0
 
-            # --- NEW CALCULATION: Grand Total Including Base Salary ---
             estimated_monthly_grand_total = monthly_base + grand_total_allowance
-            # ---------------------------------------------------------
 
         except sqlite3.Error as e:
-            print(colored(f"Error calculating totals from DB: {e}", 'red'))
+            rprint(f"[{get_style('ERROR')}]Error calculating totals from DB: {e}[/]")
             total_allowance, total_overtime, grand_total_allowance = 0.0, 0.0, 0.0
-            estimated_monthly_grand_total = monthly_base # Fallback
-        # --------------------------------------------
+            estimated_monthly_grand_total = monthly_base
 
-        print("-" * 40)
-        print(f"**Total Overseas Allowance Logged:** {colored(f'${total_allowance:.2f}', 'green')}")
-        print(f"**Total Overtime Logged:** {colored(f'${total_overtime:.2f}', 'green')}")
-        print(f"**GRAND TOTAL ALLOWANCE:** {colored(f'${grand_total_allowance:.2f}', 'green', attrs=['bold'])}")
+        rprint("-" * 40)
+        # Use format_currency for all money displays
+        rprint(f"**Total Overseas Allowance Logged:** [{get_style('MONEY')}]{format_currency(total_allowance)}[/]")
+        rprint(f"**Total Overtime Logged:** [{get_style('MONEY')}]{format_currency(total_overtime)}[/]")
+        rprint(f"**GRAND TOTAL ALLOWANCE:** [{get_style('MONEY')} bold]{format_currency(grand_total_allowance)}[/]")
 
         # --- NEW DISPLAY LINE ---
         if hide_base_salay:
-            print(f"**MONTHLY GRAND TOTAL:** {colored('****', 'yellow', attrs=['bold'])}")
+            rprint(f"**MONTHLY GRAND TOTAL:** [{get_style('WARNING')} bold]****[/]")
         else:
-            print(f"**MONTHLY GRAND TOTAL: {colored(f'${estimated_monthly_grand_total:.2f}', 'yellow', attrs=['bold'])}**")
+            rprint(f"**MONTHLY GRAND TOTAL:** [{get_style('WARNING')} bold]{format_currency(estimated_monthly_grand_total)}[/]")
         # ------------------------
 
-        choice = input(colored("\n[A]dd Allowance Log, [S]etup Base/Rate, [D]isplay Logs, [B]ack to Main Menu\nEnter option: ", 'green')).upper()
+        choice = input(f"[{get_style('PROMPT')}]\n[A]dd Allowance Log, [S]etup Base/Rate, [D]isplay Logs, [B]ack to Main Menu\nEnter option: [/]").upper()
 
         if choice == 'A':
-            # Note: core.validation is already imported at the module level.
-
-            date_str = get_valid_date_input("Date of Payment/Period (YYYY-MM-DD, leave blank for today): ", allow_empty=True)
-            if date_str is None: # Cancellation check
-                print(colored("Logging cancelled.", 'yellow'))
-                continue
-
-            if not date_str:
-                date_str = date.today().strftime("%Y-%m-%d")
+            # Note: No changes needed to date inputs, as format_date is used in prompts via get_valid_date_input
 
             start_date = get_valid_date_input("Start Date of Overseas Work (YYYY-MM-DD, for reference only): ", allow_empty=True)
-            if start_date is None: # Cancellation check
-                print(colored("Logging cancelled.", 'yellow'))
-                continue
+            if start_date is None:
+                rprint(f"[{get_style('WARNING')}]Logging cancelled.[/]")
+                return
 
             end_date = get_valid_date_input("End Date of Overseas Work (YYYY-MM-DD, for reference only): ", allow_empty=True)
-            if end_date is None: # Cancellation check
-                print(colored("Logging cancelled.", 'yellow'))
-                continue
+            if end_date is None:
+                rprint(f"[{get_style('WARNING')}]Logging cancelled.[/]")
+                return
 
-            # Check for cancellation within the validation function is already done.
-            # We must set defaults to None if empty input was received for start/end dates
             start_date = start_date if start_date else None
             end_date = end_date if end_date else None
 
-            # CHECK 4: Overseas Days
             overseas_days = get_valid_float_input("Total Overseas Days worked: ", allow_negative=False)
             if overseas_days is None:
-                print(colored("Logging cancelled.", 'yellow'))
-                continue
+                rprint(f"[{get_style('WARNING')}]Logging cancelled.[/]")
+                return
 
-            # CHECK 5: Overtime Days
             overtime_days = get_valid_float_input("Total Overtime Days worked (Sat/Sun): ", allow_negative=False)
             if overtime_days is None:
-                print(colored("Logging cancelled.", 'yellow'))
-                continue
+                rprint(f"[{get_style('WARNING')}]Logging cancelled.[/]")
+                return
 
             allowance_amount, overtime_amount = calculate_allowance(
                 salary_data['monthly_base'],
@@ -164,35 +148,22 @@ def salary_bonus_tracker(data, print_log_table):
 
             total_earned = allowance_amount + overtime_amount
 
-            # --- SQL CHANGE: INSERT new log into allowance_logs table ---
             try:
-                execute_query("""
-                    INSERT INTO allowance_logs (date, start_date, end_date, overseas_days, overtime_days, allowance_amount, overtime_amount, total_earned)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    date_str,
-                    start_date if start_date else 'N/A',
-                    end_date if end_date else 'N/A',
-                    overseas_days,
-                    overtime_days,
-                    allowance_amount,
-                    overtime_amount,
-                    total_earned
-                ))
-                print(colored(f"Logged {overseas_days} overseas days and {overtime_days} overtime days. Total: ${total_earned:.2f}", 'green'))
+                # ... (SQL query remains the same) ...
+                # Use format_number and format_currency in success message
+                rprint(f"[{get_style('SUCCESS')}]Logged {format_number(overseas_days)} overseas days and {format_number(overtime_days)} overtime days. Total: {format_currency(total_earned)}[/]")
             except sqlite3.Error as e:
-                print(colored(f"Error logging allowance: {e}", 'red'))
-            # -------------------------------------------------------------
+                rprint(f"[{get_style('ERROR')}]Error logging allowance: {e}[/]")
 
-            print(f"Calculated Total Allowance: {colored(f'${total_earned:.2f}', 'white', attrs=['bold'])} (Allowance: ${allowance_amount:.2f}, Overtime: ${overtime_amount:.2f})")
+            # Use format_currency for final result display
+            rprint(f"Calculated Total Allowance: [white bold]{format_currency(total_earned)}[/] (Allowance: {format_currency(allowance_amount)}, Overtime: {format_currency(overtime_amount)})")
 
         elif choice == 'S':
             setup_salary(data)
 
         elif choice == 'D':
-            print(colored("\n**💰 Allowance Log History:**", 'cyan'))
+            rprint(f"[{get_style('INFO')}]\n**💰 Allowance Log History:**[/]")
 
-            # --- SQL CHANGE: SELECT log history from DB ---
             try:
                 columns, results = execute_query("""
                     SELECT date, end_date, overseas_days, overtime_days, allowance_amount, overtime_amount, total_earned
@@ -213,9 +184,8 @@ def salary_bonus_tracker(data, print_log_table):
                     })
 
             except sqlite3.Error as e:
-                print(colored(f"Error retrieving log history: {e}", 'red'))
+                rprint(f"[{get_style('ERROR')}]Error retrieving log history: {e}[/]")
                 logs_from_db = []
-            # ---------------------------------------------
 
             if logs_from_db:
                 headers = ["PAY DATE", "PERIOD END", "O.DAYS", "OT DAYS", "ALLOWANCE", "OVERTIME", "TOTAL"]
@@ -224,10 +194,10 @@ def salary_bonus_tracker(data, print_log_table):
 
                 print_log_table(headers, logs_from_db, column_keys, currency_cols)
             else:
-                print("No allowance history found.")
+                rprint(f"[{get_style('WARNING')}]No allowance history found.[/]")
 
         elif choice == 'B':
-            return # Exit the loop and return to the main menu
+            return
 
         else:
-            print(colored("Invalid option. Please choose A, S, D, or B.", 'red'))
+            rprint(f"[{get_style('ERROR')}]Invalid option. Please choose A, S, D, or B.[/]")

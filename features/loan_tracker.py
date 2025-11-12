@@ -3,7 +3,9 @@ import datetime
 import sqlite3
 from core.database import execute_query
 from core.validation import get_valid_float_input, get_valid_date_input
-from termcolor import colored
+from core.styles import get_style
+from core.formatting import format_currency, format_number, format_date
+from rich import print as rprint # Use Rich print for all styled output
 
 # --- Global map to store displayed index to DB ID mapping ---
 DISPLAY_ID_MAP = {}
@@ -13,6 +15,7 @@ DISPLAY_ID_MAP = {}
 def get_loan_summary(loan_id, total_amount, due_day, master_status):
     """
     Calculates the total paid, remaining balance, and status/payment status for a single loan.
+    (Uses Centralized Styling and Formatting)
     """
     try:
         # 1. Calculate Total Paid and Remaining Balance
@@ -22,16 +25,20 @@ def get_loan_summary(loan_id, total_amount, due_day, master_status):
         total_paid = paid_result[0][0] if paid_result and paid_result[0][0] is not None else 0.0
         remaining_balance = total_amount - total_paid
 
+        # Helper to get the neutral N/A style
+        na_style = get_style('INFO')
+
         # --- Loan Completion Status Logic ---
-        # If master_status is already "Finished" (manually or automatically marked), stick to that.
+
+        # If manually Finished
         if master_status == 'Finished':
-            return total_paid, 0.0, colored('Finished', 'green'), 'Finished', colored('N/A', 'light_grey')
+            return total_paid, 0.0, f"[{get_style('STATUS_FINISHED')}]Finished[/]", 'Finished', f"[{na_style}]N/A[/]"
 
-        # If mathematically paid off, set the status to Finished
+        # If mathematically paid off (Auto Finished)
         if remaining_balance <= 0.0:
-            return total_paid, 0.0, colored('Finished (Auto)', 'green'), 'Finished', colored('N/A', 'light_grey')
+            return total_paid, 0.0, f"[{get_style('STATUS_FINISHED')}]Finished (Auto)[/]", 'Finished', f"[{na_style}]N/A[/]"
 
-        # --- Monthly Payment Status (Only runs if loan is Ongoing) ---
+        # --- Monthly Payment Status ---
         today = datetime.date.today()
         current_month_key = today.strftime("%Y-%m")
 
@@ -44,20 +51,78 @@ def get_loan_summary(loan_id, total_amount, due_day, master_status):
         payments_this_month = count_result[0][0]
 
         # Determine monthly status based on payments and due date
-        monthly_status_display = colored('N/A', 'light_grey')
+        monthly_status_display = f"[{na_style}]N/A[/]"
         if due_day is not None and due_day > 0:
             if payments_this_month > 0:
-                monthly_status_display = colored('PAID', 'green')
+                monthly_status_display = f"[{get_style('STATUS_PAID')}]PAID[/]"
             elif today.day > due_day:
-                monthly_status_display = colored('MISSED', 'red', attrs=['bold'])
+                monthly_status_display = f"[{get_style('STATUS_MISSED')}]MISSED[/]"
             else:
-                 monthly_status_display = colored('DUE', 'yellow')
+                 monthly_status_display = f"[{get_style('STATUS_DUE')}]DUE[/]"
 
         # Return: total_paid, remaining, display_status, calculated_status (for DB), monthly_status_display
-        return total_paid, remaining_balance, colored('Ongoing', 'yellow'), 'Ongoing', monthly_status_display
+        return total_paid, remaining_balance, f"[{get_style('STATUS_ONGOING')}]Ongoing[/]", 'Ongoing', monthly_status_display
 
     except sqlite3.Error as e:
-        return 0.0, total_amount, colored("DB Error", 'red'), 'DB Error', colored('N/A', 'red')
+        return 0.0, total_amount, f"[{get_style('ERROR')}]DB Error[/]", 'DB Error', f"[{get_style('ERROR')}]N/A[/]"
+
+# --- NEW FUNCTION: Display Recent Payments ---
+def display_recent_payments(print_log_table, loan_id, limit=3):
+    """Retrieves and displays the last N payments made for a specific loan."""
+
+    rprint(f"\n[{get_style('INFO')}]--- Last {limit} Payments for Loan ID {loan_id} ---[/]")
+
+    try:
+        query = """
+            SELECT payment_date, amount_paid
+            FROM loan_payments
+            WHERE loan_id = ?
+            ORDER BY payment_date DESC, id DESC
+            LIMIT ?
+        """
+        columns, results = execute_query(query, (loan_id, limit))
+
+        if not results:
+            rprint(f"[{get_style('WARNING')}]No payment history found.[/]")
+            return
+
+        payment_logs = []
+        for date_str, amount in results:
+            payment_logs.append({
+                'PAYMENT_DATE': date_str,
+                'AMOUNT_PAID': amount
+            })
+
+        history_headers = ["PAYMENT DATE", "AMOUNT PAID"]
+        history_keys = ["PAYMENT_DATE", "AMOUNT_PAID"]
+        currency_cols = [1]
+
+        # Use the global print_log_table function
+        print_log_table(history_headers, payment_logs, history_keys, currency_cols)
+
+    except sqlite3.Error as e:
+        rprint(f"[{get_style('ERROR')}]Error retrieving recent payments: {e}[/]")
+
+# --- Input Resolver Utility ---
+def resolve_display_id(input_str, action_desc="Loan"):
+    """
+    Converts a user-provided display index (e.g., '1') into the actual DB ID
+    using the global DISPLAY_ID_MAP.
+
+    Returns: The database ID (int), None (on cancel), or False (on invalid input).
+    """
+    global DISPLAY_ID_MAP
+
+    if input_str.upper() in ['B', 'BACK']:
+        rprint(f"[{get_style('WARNING')}]{action_desc} cancelled.[/]")
+        return None
+
+    if input_str in DISPLAY_ID_MAP:
+        return DISPLAY_ID_MAP[input_str]
+    else:
+        rprint(f"[{get_style('ERROR')}]Error: Invalid index '{input_str}'. Please enter a listed index number.[/]")
+        return False
+
 
 # --- Core Functions ---
 
@@ -69,7 +134,7 @@ def loan_tracker(data, print_log_table):
     DISPLAY_ID_MAP.clear() # Clear map at start of each loop
 
     while True: # Persistence Loop
-        print(colored("\n--- 🏦 Loan Tracker ---", 'cyan'))
+        rprint(f"[{get_style('HEADER')}]\n--- 🏦 Loan Tracker ---[/]")
 
         # 1. Retrieve all master loans
         try:
@@ -84,14 +149,12 @@ def loan_tracker(data, print_log_table):
         for row in loans_master_rows:
             loan_id, desc, total, monthly, start, duration, due_day, master_status = row
 
-            # Calculate summary using the new due_day and master_status
+            # Calculate summary
             total_paid, remaining, display_status, calculated_status, monthly_status = get_loan_summary(loan_id, total, due_day, master_status)
 
             # --- AUTOMATIC STATUS UPDATE (CRITICAL) ---
-            # Update the status only if it's NOT manually finished, but mathematically finished
             if master_status != 'Finished' and calculated_status == 'Finished':
                 execute_query("UPDATE loans_master SET status = ? WHERE id = ?", (calculated_status, loan_id))
-            # ------------------------------------------
 
             processed_loans.append({
                 'ID': loan_id,
@@ -110,9 +173,9 @@ def loan_tracker(data, print_log_table):
 
 
         if not processed_loans:
-            print(colored("No loans currently logged.", 'yellow'))
+            rprint(f"[{get_style('WARNING')}]No loans currently logged.[/]")
         else:
-            print(colored("\n**Current Loan Summary (Select by Index):**", 'white', attrs=['bold']))
+            rprint(f"[{get_style('INFO')}]\n**Current Loan Summary (Select by Index):**[/]")
 
             summary_headers = ["IDX", "NAME", "TOTAL LOAN", "MONTHLY PMT", "DUE DAY", "REMAINING BALANCE", "PAYMENT STATUS", "STATUS"]
             summary_keys = ["DISPLAY_INDEX", "NAME", "TOTAL", "MONTHLY", "DUE_DAY", "REMAINING", "PAY_STATUS", "STATUS"]
@@ -121,116 +184,57 @@ def loan_tracker(data, print_log_table):
             print_log_table(summary_headers, processed_loans, summary_keys, currency_cols)
 
 
-        print("\n[A]dd New Loan, [P]ay Loan, [V]iew Payment History, [M]ark Finished, [B]ack to Main Menu") # ADDED [M]
-        choice = input(colored("Enter option: ", 'green')).upper()
+        # Separated menu display and input for clean Rich output
+        rprint("\n[A]dd New Loan, [P]ay Loan, [V]iew Payment History, [M]ark Finished, [B]ack to Main Menu")
+        choice = input(f"[{get_style('PROMPT')}]Enter option: [/]").upper()
 
         if choice == 'A':
             add_loan()
         elif choice == 'P':
-            log_loan_payment()
+            log_loan_payment(print_log_table)
         elif choice == 'V':
             view_loan_details(print_log_table)
-        elif choice == 'M': # NEW OPTION
+        elif choice == 'M':
             mark_loan_finished()
         elif choice == 'B':
             return # Exit persistence loop
         else:
-            print(colored("Invalid option. Please choose A, P, V, M, or B.", 'red'))
+            rprint(f"[{get_style('ERROR')}]Invalid option. Please choose A, P, V, M, or B.[/]")
 
 
-# --- Input Resolver Utility ---
-def resolve_display_id(input_str, action_desc="Loan"):
-    """Converts a user-provided display index (e.g., '1') into the actual DB ID."""
-    global DISPLAY_ID_MAP
-
-    if input_str.upper() in ['B', 'BACK']:
-        print(colored(f"{action_desc} cancelled.", 'yellow'))
-        return None
-
-    if input_str in DISPLAY_ID_MAP:
-        return DISPLAY_ID_MAP[input_str]
-    else:
-        print(colored(f"Error: Invalid index '{input_str}'. Please enter a listed index number.", 'red'))
-        return False # Use False to signal invalid input but not cancellation
-
-# --- NEW FUNCTION: Mark Loan Finished Manually ---
-def mark_loan_finished():
-    """Allows user to manually mark a loan as finished (e.g., due to discount or odd final payment)."""
-    print(colored("\n--- Mark Loan as Finished ---", 'red'))
-
-    if not DISPLAY_ID_MAP:
-        print(colored("No active loans found to mark finished.", 'yellow'))
-        return
-
-    index_input = input("Enter **INDEX** of the loan to mark FINISHED (Type 'B' to cancel): ").strip()
-
-    loan_id = resolve_display_id(index_input, "Mark Finished")
-
-    if loan_id is None or loan_id is False:
-        return
-
-    # Check current status and prevent double-marking
-    _, current_status_result = execute_query("SELECT description, status FROM loans_master WHERE id = ?", (loan_id,))
-    if not current_status_result:
-        print(colored(f"Error: Loan ID {loan_id} not found.", 'red'))
-        return
-
-    desc, status = current_status_result[0]
-
-    if status == 'Finished':
-        print(colored(f"Loan '{desc}' is already marked as Finished.", 'yellow'))
-        return
-
-    # Get summary to show remaining balance before marking finished
-    _, loan_result = execute_query("SELECT total_amount, due_day FROM loans_master WHERE id = ?", (loan_id,))
-    total_amount, due_day = loan_result[0]
-    _, remaining, _, _, _ = get_loan_summary(loan_id, total_amount, due_day, status)
-
-    confirmation = input(colored(f"CONFIRM: Mark '{desc}' (Remaining: ${remaining:.2f}) as FINISHED? (Y/N): ", 'red')).upper()
-
-    if confirmation == 'Y':
-        try:
-            execute_query("UPDATE loans_master SET status = 'Finished' WHERE id = ?", (loan_id,))
-            print(colored(f"SUCCESS: Loan '{desc}' has been marked as FINISHED.", 'green', attrs=['bold']))
-        except sqlite3.Error as e:
-            print(colored(f"Error updating loan status: {e}", 'red'))
-    else:
-        print(colored("Action cancelled.", 'yellow'))
-
-
-# --- ADD LOAN (No changes needed here) ---
 def add_loan():
-    # ... (function body remains the same) ...
-    print(colored("\n--- Add New Loan ---", 'yellow'))
+    """Prompts user for new loan details and inserts into loans_master."""
+    rprint(f"[{get_style('WARNING')}]\n--- Add New Loan ---[/]")
 
+    # Input validation and cancellation checks
     description = input("Loan Description (e.g., Laptop, Car, Type 'B' to cancel): ").strip()
     if description.upper() in ['B', 'BACK'] or not description:
-        print(colored("Loan addition cancelled.", 'yellow'))
+        rprint(f"[{get_style('WARNING')}]Loan addition cancelled.[/]")
         return
 
     total_amount = get_valid_float_input("Total Amount of Loan: $", allow_negative=False)
     if total_amount is None:
-        print(colored("Loan addition cancelled.", 'yellow'))
+        rprint(f"[{get_style('WARNING')}]Loan addition cancelled.[/]")
         return
 
     monthly_payment = get_valid_float_input("Required Monthly Payment: $", allow_negative=False)
     if monthly_payment is None:
-        print(colored("Loan addition cancelled.", 'yellow'))
+        rprint(f"[{get_style('WARNING')}]Loan addition cancelled.[/]")
         return
 
     start_date = get_valid_date_input("Start Date (YYYY-MM-DD): ", allow_empty=False)
     if start_date is None:
-        print(colored("Loan addition cancelled.", 'yellow'))
+        rprint(f"[{get_style('WARNING')}]Loan addition cancelled.[/]")
         return
 
     duration_months = get_valid_float_input("Duration in Months: ", allow_negative=False)
     if duration_months is None:
-        print(colored("Loan addition cancelled.", 'yellow'))
+        rprint(f"[{get_style('WARNING')}]Loan addition cancelled.[/]")
         return
 
     due_day = get_valid_float_input("Payment Due Day of the Month (e.g., 15 for the 15th): ", allow_negative=False)
     if due_day is None or due_day < 1 or due_day > 31:
-        print(colored("Invalid or cancelled due day. Must be between 1 and 31. Loan addition cancelled.", 'yellow'))
+        rprint(f"[{get_style('WARNING')}]Invalid or cancelled due day. Must be between 1 and 31. Loan addition cancelled.[/]")
         return
     due_day = int(due_day)
 
@@ -239,19 +243,20 @@ def add_loan():
             INSERT INTO loans_master (description, total_amount, monthly_payment, start_date, duration_months, due_day)
             VALUES (?, ?, ?, ?, ?, ?)
         """, (description, total_amount, monthly_payment, start_date, int(duration_months), due_day))
-        print(colored(f"Loan '{description}' for ${total_amount:.2f} added successfully.", 'green'))
+        rprint(f"[{get_style('SUCCESS')}]Loan '{description}' for {format_currency(total_amount)} added successfully.[/]")
 
     except sqlite3.Error as e:
-        print(colored(f"Error adding loan to database: {e}", 'red'))
+        rprint(f"[{get_style('ERROR')}]Error adding loan to database: {e}[/]")
 
 
-# --- LOG PAYMENT (No changes needed here) ---
-def log_loan_payment():
-    # ... (function body remains the same) ...
-    print(colored("\n--- Log Loan Payment ---", 'yellow'))
+def log_loan_payment(print_log_table):
+    """
+    Prompts user to log a payment against an existing loan and displays recent logs.
+    """
+    rprint(f"[{get_style('WARNING')}]\n--- Log Loan Payment ---[/]")
 
     if not DISPLAY_ID_MAP:
-        print(colored("No active loans found to pay.", 'yellow'))
+        rprint(f"[{get_style('WARNING')}]No active loans found to pay.[/]")
         return
 
     index_input = input("Enter **INDEX** of loan to pay (Type 'B' to cancel): ").strip()
@@ -264,20 +269,25 @@ def log_loan_payment():
     _, loan_check = execute_query("SELECT description, status FROM loans_master WHERE id = ?", (loan_id,))
     desc, status = loan_check[0]
     if status == 'Finished':
-        print(colored(f"Loan '{desc}' (ID {loan_id}) is already marked as Finished.", 'red'))
+        rprint(f"[{get_style('ERROR')}]Loan '{desc}' (ID {loan_id}) is already marked as Finished.[/]")
         return
 
     payment_date = get_valid_date_input("Payment Date (YYYY-MM-DD, leave blank for today): ", allow_empty=True)
     if payment_date is None:
-        print(colored("Payment cancelled.", 'yellow'))
+        rprint(f"[{get_style('WARNING')}]Payment cancelled.[/]")
         return
 
     if not payment_date:
         payment_date = datetime.date.today().strftime("%Y-%m-%d")
 
-    amount_paid = get_valid_float_input(f"Amount paid for Loan '{desc}': $", allow_negative=False)
+    # Get current monthly payment suggestion for prompt clarity
+    _, monthly_payment_result = execute_query("SELECT monthly_payment FROM loans_master WHERE id = ?", (loan_id,))
+    monthly_payment = monthly_payment_result[0][0] if monthly_payment_result else 0.0
+
+    # Use format_currency in the prompt
+    amount_paid = get_valid_float_input(f"Amount paid for Loan '{desc}' (Suggested: {format_currency(monthly_payment)}): $", allow_negative=False)
     if amount_paid is None:
-        print(colored("Payment cancelled.", 'yellow'))
+        rprint(f"[{get_style('WARNING')}]Payment cancelled.[/]")
         return
 
     try:
@@ -285,18 +295,68 @@ def log_loan_payment():
             INSERT INTO loan_payments (loan_id, payment_date, amount_paid)
             VALUES (?, ?, ?)
         """, (loan_id, payment_date, amount_paid))
-        print(colored(f"Payment of ${amount_paid:.2f} logged successfully for Loan '{desc}'.", 'green'))
+
+        # Use format_currency in success message
+        rprint(f"[{get_style('SUCCESS')}]Payment of {format_currency(amount_paid)} logged successfully for Loan '{desc}'.[/]")
+
+        # --- NEW LOGIC: Display recent payments immediately ---
+        display_recent_payments(print_log_table, loan_id, limit=3)
+        # ---------------------------------------------------
+
     except sqlite3.Error as e:
-        print(colored(f"Error logging payment: {e}", 'red'))
+        rprint(f"[{get_style('ERROR')}]Error logging payment: {e}[/]")
 
 
-# --- VIEW DETAILS (No changes needed here) ---
-def view_loan_details(print_log_table):
-    """Displays detailed payment history for a selected loan."""
-    print(colored("\n--- Loan History Details ---", 'yellow'))
+def mark_loan_finished():
+    """Allows user to manually mark a loan as finished (e.g., due to discount or odd final payment)."""
+    rprint(f"[{get_style('ERROR')}]\n--- Mark Loan as Finished ---[/]")
 
     if not DISPLAY_ID_MAP:
-        print(colored("No active loans found to view history.", 'yellow'))
+        rprint(f"[{get_style('WARNING')}]No active loans found to mark finished.[/]")
+        return
+
+    index_input = input("Enter **INDEX** of the loan to mark FINISHED (Type 'B' to cancel): ").strip()
+
+    loan_id = resolve_display_id(index_input, "Mark Finished")
+
+    if loan_id is None or loan_id is False:
+        return
+
+    # Check current status and prevent double-marking
+    _, current_status_result = execute_query("SELECT description, status FROM loans_master WHERE id = ?", (loan_id,))
+    if not current_status_result:
+        rprint(f"[{get_style('ERROR')}]Error: Loan ID {loan_id} not found.[/]")
+        return
+
+    desc, status = current_status_result[0]
+
+    if status == 'Finished':
+        rprint(f"[{get_style('WARNING')}]Loan '{desc}' is already marked as Finished.[/]")
+        return
+
+    # Get summary to show remaining balance before marking finished
+    _, loan_result = execute_query("SELECT total_amount, due_day FROM loans_master WHERE id = ?", (loan_id,))
+    total_amount, due_day = loan_result[0]
+    _, remaining, _, _, _ = get_loan_summary(loan_id, total_amount, due_day, status)
+
+    confirmation = input(f"[{get_style('ERROR')}]CONFIRM: Mark '{desc}' (Remaining: {format_currency(remaining)}) as FINISHED? (Y/N): [/]").upper()
+
+    if confirmation == 'Y':
+        try:
+            execute_query("UPDATE loans_master SET status = 'Finished' WHERE id = ?", (loan_id,))
+            rprint(f"[{get_style('SUCCESS')} bold]SUCCESS: Loan '{desc}' has been marked as FINISHED.[/]")
+        except sqlite3.Error as e:
+            rprint(f"[{get_style('ERROR')}]Error updating loan status: {e}[/]")
+    else:
+        rprint(f"[{get_style('WARNING')}]Action cancelled.[/]")
+
+
+def view_loan_details(print_log_table):
+    """Displays detailed payment history for a selected loan."""
+    rprint(f"[{get_style('WARNING')}]\n--- Loan History Details ---[/]")
+
+    if not DISPLAY_ID_MAP:
+        rprint(f"[{get_style('WARNING')}]No active loans found to view history.[/]")
         return
 
     index_input = input("Enter **INDEX** of loan to view history (Type 'B' to cancel): ").strip()
@@ -310,22 +370,23 @@ def view_loan_details(print_log_table):
     _, master_result = execute_query(master_query, (loan_id,))
 
     if not master_result:
-        print(colored(f"Error: Loan ID {loan_id} not found.", 'red'))
+        rprint(f"[{get_style('ERROR')}]Error: Loan ID {loan_id} not found.[/]")
         return
 
-    desc, total_amount, due_day, master_status = master_result[0] # Retrieve master_status
+    desc, total_amount, due_day, master_status = master_result[0]
     total_paid, remaining, display_status, _, monthly_status = get_loan_summary(loan_id, total_amount, due_day, master_status)
 
-    print(f"\nLoan: {colored(desc, 'white', attrs=['bold'])} | Total Loan: ${total_amount:.2f}")
-    print(f"Total Paid: ${total_paid:.2f} | Remaining Balance: {colored(f'${remaining:.2f}', 'yellow')}")
-    print(f"Status: {display_status} | Due Day: {due_day if due_day else 'N/A'} | Monthly Status: {monthly_status}")
-    print("-" * 50)
+    rprint(f"\nLoan: [white bold]{desc}[/] | Total Loan: {format_currency(total_amount)}")
+    rprint(f"Total Paid: {format_currency(total_paid)} | Remaining Balance: [{get_style('WARNING')}]{format_currency(remaining)}[/]")
+    rprint(f"Status: {display_status} | Due Day: {due_day if due_day else 'N/A'} | Monthly Status: {monthly_status}")
+    rprint("-" * 50)
 
+    # 2. Retrieve payment history
     history_query = "SELECT payment_date, amount_paid FROM loan_payments WHERE loan_id = ? ORDER BY payment_date DESC"
     _, history_results = execute_query(history_query, (loan_id,))
 
     if not history_results:
-        print("No payments logged for this loan.")
+        rprint(f"[{get_style('INFO')}]No payments logged for this loan.[/]")
         return
 
     payment_logs = []
@@ -335,6 +396,7 @@ def view_loan_details(print_log_table):
             'AMOUNT_PAID': amount
         })
 
+    # 3. Display history table
     history_headers = ["PAYMENT DATE", "AMOUNT PAID"]
     history_keys = ["PAYMENT_DATE", "AMOUNT_PAID"]
     currency_cols = [1]

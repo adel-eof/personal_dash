@@ -11,9 +11,13 @@ from core.data_manager import load_data
 from core.database import execute_query
 from llama_cpp import Llama
 from termcolor import colored # ADDED: for color output
+from dotenv import load_dotenv
+
+# --- ENVIRONMENT LOAD ---
+load_dotenv()
 
 # --- LLM CONFIGURATION ---
-MODEL_PATH = "/home/jigsaw/projects/llm-models/mistral-7b-instruct-v0.2.Q4_K_M.gguf"
+MODEL_PATH = os.getenv("MODEL_PATH")
 N_CTX = 4096
 LLM_N_GPU_LAYERS = 60
 
@@ -128,12 +132,26 @@ def execute_sql_query(query: str) -> str:
     try:
         columns, results = execute_query(query)
 
-        if not results:
-            return json.dumps({"status": "no_results"})
+        # 1. Handle Empty Results (including [None] for aggregate queries on empty tables)
+        is_aggregate_zero = (
+            len(results) == 1 and
+            len(columns) == 1 and
+            (results[0][0] is None or results[0][0] == 0) and
+            any(agg in columns[0].upper() for agg in ['SUM', 'COUNT', 'AVG'])
+        )
+
+        if not results or is_aggregate_zero:
+            # Report a clean zero result for aggregates, or simple 'no_results' otherwise
+            clean_data = {columns[0]: 0.0} if is_aggregate_zero else []
+            return json.dumps({"status": "no_results", "data": clean_data, "query": query})
 
         formatted_results = []
         for row in results:
-            formatted_results.append(dict(zip(columns, row)))
+            row_dict = {}
+            for col_name, value in zip(columns, row):
+                # Ensure values are clean, readable strings/floats for the summarizing AI
+                row_dict[col_name] = value if value is not None else "NULL"
+            formatted_results.append(row_dict)
 
         # Return raw JSON for the next pass
         return json.dumps({"status": "success", "data": formatted_results})
@@ -204,6 +222,7 @@ ALLOWED_TOOLS = {
         "schema": SQLQueryArgs,
         "description": (
             "Use for complex data analysis, calculating totals (SUM/COUNT), or filtering logs. "
+            "CRITICAL RULE: When using SUM, COUNT, or AVG, you MUST assign an alias using the 'AS' keyword (e.g., 'SELECT SUM(amount) AS total_amount')."
             "DATE FILTERING FORMAT: Use SUBSTR(date, 1, 7) = 'YYYY-MM' for month filtering, or SUBSTR(date, 1, 4) = 'YYYY' for year filtering. "
             "IMPORTANT PLACEHOLDERS: For current time, use '{{CURRENT_YEAR}}' or '{{CURRENT_MONTH}}' (format MM). For relative time, use '{{CURRENT_YEAR-N}}' or '{{CURRENT_MONTH+N}}'. "
             "Example Month Query: WHERE SUBSTR(date, 1, 7) = '{{CURRENT_YEAR}}-{{CURRENT_MONTH}}'. "
@@ -215,6 +234,8 @@ ALLOWED_TOOLS = {
             "3. tasks (id, task, done)"
             "4. documents (id, name, expiry_date) - Use ORDER BY expiry_date ASC LIMIT 1 for 'soonest'."
             "5. allowance_logs (id, date, total_earned, overseas_days, overtime_days, allowance_amount, overtime_amount)"
+            "6. **loans_master** (id, description, total_amount, monthly_payment, start_date, duration_months, due_day, status) - Use this for general loan terms."
+            "7. **loan_payments** (id, loan_id, payment_date, amount_paid) - Use with SUM(amount_paid) and JOIN on loans_master for balances."
         )
     },
 }
@@ -326,7 +347,7 @@ def call_local_llm(user_query: str, history: list) -> str:
                 return clean_json
 
     except (ValueError, json.JSONDecodeError) as e:
-        # print(f"[DEBUG: JSON Extraction Failed. Error: {e}]")
+        print(f"[DEBUG: JSON Extraction Failed. Error: {e}]")
         return f'{{"error": "LLM output was not clean JSON. Raw text: {llm_output_text.replace("\"", "''")}"}}'
 
     return f'{{"error": "LLM output was not clean JSON. Raw text: {llm_output_text.replace("\"", "''")}"}}'

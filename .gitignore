@@ -55,5 +55,6 @@ Thumbs.db
 *.sqlite3
 
 # user specific
+.env
 backup/
-personal_dashboard.db
+*.db

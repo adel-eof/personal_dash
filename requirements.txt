@@ -1,4 +1,5 @@
 llama-cpp-python
 pydantic
-termcolor
 python-dateutil
+rich
+python-dotenv

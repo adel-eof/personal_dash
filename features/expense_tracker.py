@@ -3,9 +3,11 @@ import datetime
 from core.validation import get_valid_float_input, get_valid_date_input
 from core.database import execute_query
 import sqlite3
-from termcolor import colored
+from core.styles import get_style
+from core.formatting import format_currency, format_number
+from rich import print as rprint
 
-# --- NEW: Category Retrieval Function ---
+# --- Category Retrieval Function ---
 def get_recent_categories(limit=5):
     """Retrieves the top N most frequent expense categories from the database."""
     try:
@@ -19,18 +21,17 @@ def get_recent_categories(limit=5):
         """
         _, results = execute_query(query, (limit,))
 
-        # Format results: returns a list of category names
+        # Format results: returns a list of category names (titled for display)
         return [row[0].title() for row in results if row[0]]
 
     except sqlite3.Error as e:
-        print(colored(f"[DB Error] Could not retrieve categories: {e}", 'red'))
+        rprint(f"[{get_style('ERROR')}][DB Error] Could not retrieve categories: {e}[/]")
         return []
-# ----------------------------------------
 
 
 def expense_reporting(data, print_log_table):
     """Calculates and displays expense summaries using SQL aggregations."""
-    print(colored("\n--- 📊 Expense Reports ---", 'cyan'))
+    rprint(f"[{get_style('HEADER')}]\n--- 📊 Expense Reports ---[/]")
 
     try:
         # Get total overall spent
@@ -38,7 +39,7 @@ def expense_reporting(data, print_log_table):
         total_spent = total_spent_result[1][0][0] if total_spent_result[1] and total_spent_result[1][0][0] is not None else 0.0
 
         if total_spent == 0.0:
-            print("No expenses logged yet to generate a report.")
+            rprint(f"[{get_style('WARNING')}]No expenses logged yet to generate a report.[/]")
             return
 
         # Get Total Spending for Current Month
@@ -68,8 +69,9 @@ def expense_reporting(data, print_log_table):
                 'total_spent': row[1]
             })
 
-        print(f"\n**Total Spending for {today.strftime('%B %Y')}: {colored(f'${current_month_total:.2f}', 'green')}**")
-        print("\n**Category Breakdown (All Time):**")
+        # Use format_currency for display
+        rprint(f"\n**Total Spending for {today.strftime('%B %Y')}: [{get_style('MONEY')}]{format_currency(current_month_total)}[/]**")
+        rprint("\n**Category Breakdown (All Time):**")
 
         headers = ["CATEGORY", "TOTAL SPENT"]
         column_keys = ["category", "total_spent"]
@@ -78,27 +80,27 @@ def expense_reporting(data, print_log_table):
         print_log_table(headers, report_logs, column_keys, currency_cols)
 
     except sqlite3.Error as e:
-        print(colored(f"Database Error during reporting: {e}", 'red'))
+        rprint(f"[{get_style('ERROR')}]Database Error during reporting: {e}[/]")
 
 def filter_expenses(data, print_log_table):
     """Prompts user for filters and displays matching expense logs using SQL."""
-    print(colored("\n--- 🔎 Filter Expenses ---", 'cyan'))
+    rprint(f"[{get_style('HEADER')}]\n--- 🔎 Filter Expenses ---[/]")
 
-    print("Filter options (Type 'B' or leave blank to skip a filter):")
+    rprint("Filter options (Type 'B' or leave blank to skip a filter):")
 
     category_filter = input("Filter by Category keyword: ").strip()
     if category_filter.upper() in ['B', 'BACK']:
-        print(colored("Filtering cancelled.", 'yellow'))
+        rprint(f"[{get_style('WARNING')}]Filtering cancelled.[/]")
         return
 
     start_date_str = get_valid_date_input("Filter Start Date (YYYY-MM-DD): ", allow_empty=True)
     if start_date_str is None and start_date_str != '':
-        print(colored("Filtering cancelled.", 'yellow'))
+        rprint(f"[{get_style('WARNING')}]Filtering cancelled.[/]")
         return
 
     end_date_str = get_valid_date_input("Filter End Date (YYYY-MM-DD): ", allow_empty=True)
     if end_date_str is None and end_date_str != '':
-        print(colored("Filtering cancelled.", 'yellow'))
+        rprint(f"[{get_style('WARNING')}]Filtering cancelled.[/]")
         return
 
     # Base query
@@ -122,7 +124,7 @@ def filter_expenses(data, print_log_table):
     try:
         columns, results = execute_query(query, tuple(params))
     except sqlite3.Error as e:
-        print(colored(f"Database Error during filtering: {e}", 'red'))
+        rprint(f"[{get_style('ERROR')}]Database Error during filtering: {e}[/]")
         return
 
     filtered_logs = []
@@ -138,7 +140,8 @@ def filter_expenses(data, print_log_table):
         filtered_logs.append(log)
         total_filtered_spent += row[3]
 
-    print(f"\n**Total Filtered Expenses ({len(filtered_logs)} items): {colored(f'${total_filtered_spent:.2f}', 'green')}**")
+    # Use format_currency for display
+    rprint(f"\n**Total Filtered Expenses ({len(filtered_logs)} items): [{get_style('MONEY')}]{format_currency(total_filtered_spent)}[/]**")
 
     if filtered_logs:
         headers = ["DATE", "CATEGORY", "DESCRIPTION", "AMOUNT"]
@@ -147,16 +150,16 @@ def filter_expenses(data, print_log_table):
 
         print_log_table(headers, filtered_logs, column_keys, currency_cols)
     else:
-        print("No expenses matched the filter criteria.")
+        rprint(f"[{get_style('WARNING')}]No expenses matched the filter criteria.[/]")
 
 
 def expense_tracker(data, print_log_table):
     """
     Adds expenses, displays totals, and offers reports/filters using SQL.
-    Includes Category Auto-Suggestion for logging expenses.
+    Includes Category Auto-Suggestion for logging expenses and enforces lowercase storage.
     """
     while True: # Persistence Loop
-        print(colored("\n--- 💰 Expense Tracker ---", 'cyan'))
+        rprint(f"[{get_style('HEADER')}]\n--- 💰 Expense Tracker ---[/]")
 
         # 1. Get total spent from DB
         try:
@@ -165,16 +168,17 @@ def expense_tracker(data, print_log_table):
         except sqlite3.Error:
             total_spent = 0.0
 
-        print(f"**Total logged expenses: {colored(f'${total_spent:.2f}', 'green')}**")
+        # Use format_currency for display
+        rprint(f"**Total logged expenses: [{get_style('MONEY')}]{format_currency(total_spent)}[/]**")
 
-        print("\n[A]dd Expense, [R]eport, [D]isplay Recent, [F]ilter/Search, [B]ack to Main Menu")
-        choice = input("Enter option: ").upper()
+        rprint("\n[A]dd Expense, [R]eport, [D]isplay Recent, [F]ilter/Search, [B]ack to Main Menu")
+        choice = input(f"[{get_style('PROMPT')}]Enter option: [/]").upper()
 
         if choice == 'A':
             # 1. Date Input and Cancellation Check
             date_str = get_valid_date_input("Date (YYYY-MM-DD, leave blank for today): ", allow_empty=True)
             if date_str is None:
-                print(colored("Expense logging cancelled.", 'yellow'))
+                rprint(f"[{get_style('WARNING')}]Expense logging cancelled.[/]")
                 continue
 
             if not date_str:
@@ -185,43 +189,41 @@ def expense_tracker(data, print_log_table):
             category_selection = None
 
             if suggested_categories:
-                print(colored("\nSuggested Categories:", 'white'))
-                # Display categories with index starting at 1
+                rprint(f"[{get_style('INFO')}]\nSuggested Categories:[/]")
                 for i, cat in enumerate(suggested_categories, 1):
-                    print(f"[{i}] {cat}")
+                    rprint(f"[{i}] {cat}")
 
-                # Get user input for selection or new category
-                category_input = input(colored("Enter **index number** or **type a new category** (Type 'B' to cancel): ", 'yellow')).strip()
+                category_input = input(f"[{get_style('PROMPT')}]Enter **index number** or **type a new category** (Type 'B' to cancel): [/]").strip()
 
                 if category_input.upper() in ['B', 'BACK']:
-                    print(colored("Expense logging cancelled.", 'yellow'))
+                    rprint(f"[{get_style('WARNING')}]Expense logging cancelled.[/]")
                     continue
 
-                # Check if input is a valid index
                 try:
                     index = int(category_input)
                     if 1 <= index <= len(suggested_categories):
                         category_selection = suggested_categories[index - 1]
                 except ValueError:
-                    # Input was text, treat it as a new category
-                    category_selection = category_input.title() # Use .title() for consistent capitalization
+                    category_selection = category_input.title()
 
-            # Fallback if no suggestions or user typed a new one
             if category_selection is None:
                 category_selection = input("Category (e.g., Food, Transport, Bills): ").strip().title()
                 if not category_selection or category_selection.upper() in ['B', 'BACK']:
-                    print(colored("Expense logging cancelled.", 'yellow'))
+                    rprint(f"[{get_style('WARNING')}]Expense logging cancelled.[/]")
                     continue
 
-            category = category_selection.lower() # Store in lowercase for consistency in DB queries
-            print(f"Category set to: {category.title()}")
+            # --- CRITICAL FIX: ENSURE LOWERCASE STORAGE ---
+            category_to_store = category_selection.lower()
+            # ---------------------------------------------
+
+            rprint(f"[{get_style('INFO')}]Category set to: {category_selection}[/]")
 
             desc = input("Description: ")
 
             # 2. Amount Input and Cancellation Check
             amount = get_valid_float_input("Amount spent: $", allow_negative=False)
             if amount is None:
-                print(colored("Expense logging cancelled.", 'yellow'))
+                rprint(f"[{get_style('WARNING')}]Expense logging cancelled.[/]")
                 continue
 
             # INSERT INTO DATABASE
@@ -229,17 +231,18 @@ def expense_tracker(data, print_log_table):
                 execute_query("""
                     INSERT INTO expenses (date, category, description, amount)
                     VALUES (?, ?, ?, ?)
-                """, (date_str, category, desc, amount))
-                print(colored(f"Expense of ${amount:.2f} logged successfully to database.", 'green'))
+                """, (date_str, category_to_store, desc, amount))
+                # Use format_currency in success message
+                rprint(f"[{get_style('SUCCESS')}]Expense of {format_currency(amount)} logged successfully to database.[/]")
             except sqlite3.Error as e:
-                print(colored(f"Error logging expense to database: {e}", 'red'))
+                rprint(f"[{get_style('ERROR')}]Error logging expense to database: {e}[/]")
 
 
         elif choice == 'R':
             expense_reporting(data, print_log_table)
 
         elif choice == 'D':
-            print(colored("\n**Recent Expenses (from DB):**", 'cyan'))
+            rprint(f"[{get_style('INFO')}]\n**Recent Expenses (from DB):**[/]")
             try:
                 # SELECT recent 5 expenses
                 columns, results = execute_query("SELECT date, category, description, amount FROM expenses ORDER BY date DESC LIMIT 5")
@@ -259,9 +262,9 @@ def expense_tracker(data, print_log_table):
                     currency_cols = [3]
                     print_log_table(headers, table_logs, column_keys, currency_cols)
                 else:
-                    print("No recent expenses found.")
+                    rprint(f"[{get_style('WARNING')}]No recent expenses found.[/]")
             except sqlite3.Error as e:
-                print(colored(f"Error retrieving recent expenses: {e}", 'red'))
+                rprint(f"[{get_style('ERROR')}]Error retrieving recent expenses: {e}[/]")
 
 
         elif choice == 'F':
@@ -272,4 +275,4 @@ def expense_tracker(data, print_log_table):
             return
 
         else:
-            print(colored("Invalid option. Please choose A, R, D, F, or B.", 'red'))
+            rprint(f"[{get_style('ERROR')}]Invalid option. Please choose A, R, D, F, or B.[/]")
